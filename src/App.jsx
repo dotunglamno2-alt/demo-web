@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { AdminBalanceHistoryTab, AdminTransactionsTab } from './AdminFinanceTabs.jsx';
 import { createWalletTransaction } from './walletTransactions.js';
 import { createId } from './ids.js';
+import { sendTestEmail, sendTestTelegram } from './notificationApi.js';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import {
   Server,
@@ -32,6 +33,7 @@ import {
   LogOut,
   QrCode,
   Wallet,
+  Landmark,
   DollarSign,
   ArrowRight,
   Edit,
@@ -455,13 +457,8 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
 
-  const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem('zcloud_currentUser');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
-    }
-    return INITIAL_USERS[0];
-  });
+  // Phiên đăng nhập chính thức phải được xác thực bởi backend.
+  const [currentUser, setCurrentUser] = useState(null);
 
   const [users, setUsers] = useState(() => {
     const saved = localStorage.getItem('zcloud_users');
@@ -635,7 +632,14 @@ export default function App() {
         { id: 'mb', bankCode: 'MB', bankName: 'MBBank (Quân Đội)', accountNumber: '0988889999', accountName: 'NGUYEN VAN QUAN TRI', enabled: true }
       ],
       memoTemplate: 'NAP {customer_username}',
-      quickAmounts: [50000, 100000, 200000, 500000, 1000000, 2000000]
+      quickAmounts: [50000, 100000, 200000, 500000, 1000000, 2000000],
+      bankApi: {
+        enabled: true,
+        autoReconcile: false,
+        historyLimit: 50,
+        transferPrefix: 'NAP',
+        webhookEnabled: true
+      }
     };
     const saved = localStorage.getItem('zcloud_topupConfig');
     if (saved) {
@@ -789,7 +793,7 @@ export default function App() {
   const [isAddLocationModalOpen, setIsAddLocationModalOpen] = useState(false);
 
   // Sync to storage
-  useEffect(() => { localStorage.setItem('zcloud_currentUser', JSON.stringify(currentUser)); }, [currentUser]);
+  // Không lưu thông tin xác thực trong localStorage.
   useEffect(() => { localStorage.setItem('zcloud_users', JSON.stringify(users)); }, [users]);
   useEffect(() => { localStorage.setItem('zcloud_vpsCategories', JSON.stringify(vpsCategories)); }, [vpsCategories]);
   useEffect(() => { localStorage.setItem('zcloud_plans', JSON.stringify(plans)); }, [plans]);
@@ -4907,18 +4911,19 @@ function AdminSettingsTab({ showToast, topupConfig, setTopupConfig }) {
     message: '🔔 ĐƠN HÀNG MỚI\nMã đơn: {order_id}\nKhách hàng: {customer_name}\nEmail: {customer_email}\nSố tiền: {amount}\nDịch vụ: {service_name}'
   };
 
-  const [smtp, setSmtp] = useState(() => {
-    try { return { ...defaultSmtp, ...(JSON.parse(localStorage.getItem('zcloud_smtpConfig')) || {}) }; } catch (error) { return defaultSmtp; }
-  });
-  const [telegram, setTelegram] = useState(() => {
-    try { return { ...defaultTelegram, ...(JSON.parse(localStorage.getItem('zcloud_telegramConfig')) || {}) }; } catch (error) { return defaultTelegram; }
-  });
+  const [smtp, setSmtp] = useState(defaultSmtp);
+  const [telegram, setTelegram] = useState(defaultTelegram);
   const [showSmtpPassword, setShowSmtpPassword] = useState(false);
   const [showTelegramToken, setShowTelegramToken] = useState(false);
+  const [isSendingEmailTest, setIsSendingEmailTest] = useState(false);
+  const [isSendingTelegramTest, setIsSendingTelegramTest] = useState(false);
   const emailBodyRef = useRef(null);
 
-  useEffect(() => { localStorage.setItem('zcloud_smtpConfig', JSON.stringify(smtp)); }, [smtp]);
-  useEffect(() => { localStorage.setItem('zcloud_telegramConfig', JSON.stringify(telegram)); }, [telegram]);
+  useEffect(() => {
+    // Xóa các secret đã từng lưu bởi bản demo cũ.
+    localStorage.removeItem('zcloud_smtpConfig');
+    localStorage.removeItem('zcloud_telegramConfig');
+  }, []);
 
   const updateSmtp = (field, value) => setSmtp(prev => ({ ...prev, [field]: value }));
   const updateTelegram = (field, value) => setTelegram(prev => ({ ...prev, [field]: value }));
@@ -4947,7 +4952,33 @@ function AdminSettingsTab({ showToast, topupConfig, setTopupConfig }) {
 
   const handleSave = () => {
     updateSmtp('port', String(Math.max(1, Number(smtp.port) || 587)));
-    showToast('✅ Đã lưu cấu hình SMTP và Telegram vào bản demo.');
+    showToast('✅ Đã lưu giao diện cấu hình. Secret SMTP/Telegram phải được cấu hình ở backend.', 'success');
+  };
+
+  const handleTestEmail = async () => {
+    if (isSendingEmailTest) return;
+    setIsSendingEmailTest(true);
+    try {
+      const result = await sendTestEmail(smtp.email);
+      showToast(`📧 ${result.message || 'Đã gửi email kiểm tra.'}`, 'success');
+    } catch (error) {
+      showToast(`SMTP: ${error.message}`, 'error');
+    } finally {
+      setIsSendingEmailTest(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    if (isSendingTelegramTest) return;
+    setIsSendingTelegramTest(true);
+    try {
+      const result = await sendTestTelegram('🔔 TLCloud: kiểm tra kết nối Telegram thành công.');
+      showToast(`⚡ ${result.message || 'Đã gửi tin nhắn kiểm tra Telegram.'}`, 'success');
+    } catch (error) {
+      showToast(`Telegram: ${error.message}`, 'error');
+    } finally {
+      setIsSendingTelegramTest(false);
+    }
   };
 
   return (
@@ -4958,7 +4989,7 @@ function AdminSettingsTab({ showToast, topupConfig, setTopupConfig }) {
             <Settings className="w-5 h-5 text-purple-400" />
             <span>Cấu Hình & Giao Diện</span>
           </h2>
-          <p className="text-xs text-slate-400 mt-1">Thiết lập thông báo bàn giao đơn hàng cho email và Telegram. Bản demo lưu cấu hình trên trình duyệt.</p>
+          <p className="text-xs text-slate-400 mt-1">Thiết lập thông báo bàn giao đơn hàng. Việc gửi thật chạy qua backend Express, không lưu secret trong trình duyệt.</p>
         </div>
         <button onClick={handleSave} className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs">Lưu Toàn Bộ Cấu Hình</button>
       </div>
@@ -4995,6 +5026,28 @@ function AdminSettingsTab({ showToast, topupConfig, setTopupConfig }) {
           <label><span className="text-slate-300 block mb-1 font-semibold">Cú pháp chuyển khoản</span><input type="text" value={topupConfig?.memoTemplate || ''} onChange={e => setTopupConfig(prev => ({ ...prev, memoTemplate: e.target.value }))} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-amber-300 font-mono" /><span className="text-[10px] text-slate-500 mt-1 block">Có thể dùng {`{customer_username}`} hoặc {`{customer_email}`}</span></label>
           <div><span className="text-slate-300 block mb-1 font-semibold">Mệnh giá nhanh (VNĐ)</span><div className="grid grid-cols-3 gap-2">{(topupConfig?.quickAmounts || []).map((amount, index) => <input key={index} type="number" min="1" value={amount} onChange={e => updateTopupAmount(index, e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-white font-mono" />)}</div></div>
         </div>
+        <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/20 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="font-black text-white flex items-center gap-2"><Landmark className="w-4 h-4 text-emerald-400" /> API NGÂN HÀNG SIEUTHICODE</h4>
+              <p className="text-[11px] text-slate-500 mt-1">Điều chỉnh đồng bộ và đối soát giao dịch nạp tiền. API token và webhook secret được giữ ở backend.</p>
+            </div>
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-900 border border-slate-800">
+              {[[true, 'BẬT'], [false, 'TẮT']].map(([value, label]) => <button key={label} type="button" onClick={() => setTopupConfig(prev => ({ ...prev, bankApi: { ...(prev.bankApi || {}), enabled: value } }))} aria-pressed={topupConfig?.bankApi?.enabled === value} className={`px-3 py-1.5 rounded-lg text-[11px] font-black ${topupConfig?.bankApi?.enabled === value ? (value ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white') : 'text-slate-500 hover:text-white'}`}>{label}</button>)}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <label><span className="text-slate-300 block mb-1 font-semibold">Số giao dịch mỗi lần đồng bộ</span><input type="number" min="1" max="100" value={topupConfig?.bankApi?.historyLimit ?? 50} onChange={e => setTopupConfig(prev => ({ ...prev, bankApi: { ...(prev.bankApi || {}), historyLimit: Math.min(100, Math.max(1, Number(e.target.value) || 50)) } }))} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono" /></label>
+            <label><span className="text-slate-300 block mb-1 font-semibold">Tiền tố nội dung chuyển khoản</span><input type="text" value={topupConfig?.bankApi?.transferPrefix || 'NAP'} onChange={e => setTopupConfig(prev => ({ ...prev, bankApi: { ...(prev.bankApi || {}), transferPrefix: e.target.value.toUpperCase() } }))} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-amber-300 font-mono" /></label>
+            <label className="flex items-center gap-2 pt-5"><input type="checkbox" checked={topupConfig?.bankApi?.autoReconcile === true} onChange={e => setTopupConfig(prev => ({ ...prev, bankApi: { ...(prev.bankApi || {}), autoReconcile: e.target.checked } }))} className="accent-emerald-500" /><span className="text-slate-300 font-semibold">Tự động đối soát</span></label>
+            <label className="flex items-center gap-2 pt-5"><input type="checkbox" checked={topupConfig?.bankApi?.webhookEnabled !== false} onChange={e => setTopupConfig(prev => ({ ...prev, bankApi: { ...(prev.bankApi || {}), webhookEnabled: e.target.checked } }))} className="accent-cyan-500" /><span className="text-slate-300 font-semibold">Nhận webhook realtime</span></label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            <span className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">Provider: SieuThiCode</span>
+            <span className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">Token: backend .env</span>
+            <span className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-800">Webhook secret: backend .env</span>
+          </div>
+        </div>
       </section>
 
       <section className="p-5 rounded-3xl bg-slate-900 border border-blue-500/30 space-y-4" aria-labelledby="smtp-config-title">
@@ -5023,7 +5076,7 @@ function AdminSettingsTab({ showToast, topupConfig, setTopupConfig }) {
           <label className="block text-xs"><span className="text-slate-300 block mb-1 font-semibold">Tiêu đề email</span><input type="text" value={smtp.subject} onChange={e => updateSmtp('subject', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white" /></label>
           <label className="block text-xs"><span className="text-slate-300 block mb-1 font-semibold">Nội dung email</span><textarea ref={emailBodyRef} rows={8} value={smtp.body} onChange={e => updateSmtp('body', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-mono text-[11px] resize-y" /></label>
           <div className="flex flex-wrap gap-1.5">{['{customer_name}', '{order_id}', '{ip}', '{username}', '{password}', '{expiry_date}'].map(variable => <button key={variable} type="button" onClick={() => insertEmailVariable(variable)} className="px-2.5 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-300 font-mono text-[11px] hover:bg-blue-500/20">{variable}</button>)}</div>
-          <button type="button" onClick={() => showToast('📧 Demo: đã tạo yêu cầu gửi thử email, nhưng chưa gửi thật vì project chưa có backend SMTP.', 'success')} className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5"><Send className="w-3.5 h-3.5" />Gửi Thử Email Bàn Giao</button>
+          <button type="button" onClick={handleTestEmail} disabled={isSendingEmailTest} className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5"><Send className="w-3.5 h-3.5" />{isSendingEmailTest ? 'Đang gửi...' : 'Gửi Thử Email Bàn Giao'}</button>
         </div>
       </section>
 
@@ -5039,11 +5092,11 @@ function AdminSettingsTab({ showToast, topupConfig, setTopupConfig }) {
         <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
           <div><h4 className="font-black text-white">Tùy Chỉnh Nội Dung Thông Báo Bot Telegram Khi Có Đơn Hàng Mới</h4><p className="text-[11px] text-slate-500 mt-1">Có thể dùng các biến: {`{order_id}`}, {`{customer_name}`}, {`{customer_email}`}, {`{amount}`}, {`{service_name}`}.</p></div>
           <textarea rows={7} value={telegram.message} onChange={e => updateTelegram('message', e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-mono text-[11px] resize-y" />
-          <button type="button" onClick={() => showToast('⚡ Demo: đã tạo yêu cầu bắn tin thử Telegram, nhưng chưa gửi thật vì project chưa có backend Telegram.', 'success')} className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs flex items-center gap-1.5"><Send className="w-3.5 h-3.5" />⚡ Bắn Tin Nhắn Test Telegram</button>
+          <button type="button" onClick={handleTestTelegram} disabled={isSendingTelegramTest} className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white font-bold text-xs flex items-center gap-1.5"><Send className="w-3.5 h-3.5" />{isSendingTelegramTest ? 'Đang gửi...' : '⚡ Bắn Tin Nhắn Test Telegram'}</button>
         </div>
       </section>
 
-      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">⚠️ SMTP Password và Telegram Token đang được lưu trong localStorage của trình duyệt demo. Không dùng cấu hình này cho production trước khi chuyển secrets sang backend hoặc biến môi trường.</div>
+      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">⚠️ SMTP Password và Telegram Token chỉ là trường nhập tạm trên giao diện. Secret gửi thật phải đặt trong biến môi trường của backend Express, không đưa vào frontend hoặc localStorage.</div>
     </div>
   );
 }
